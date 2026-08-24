@@ -53,6 +53,11 @@
     <script src="https://cdn.jsdelivr.net/npm/tom-select@2.4.1/dist/js/tom-select.complete.min.js"></script>
     <script>
 let course_selector = new TomSelect("#add_courses", {plugins: ['remove_button']})
+document.addEventListener('click', function(e) {
+    if (e.target.classList.contains('ctm-event')) {
+        e.target.remove();
+    }
+});
     </script>
 {% endblock %}
 

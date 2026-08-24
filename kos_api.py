@@ -1,4 +1,5 @@
 from math import ceil
+from pprint import pprint
 import requests
 import matplotlib.pyplot as plt
 import matplotlib.colors as pltc
@@ -59,11 +60,12 @@ class KOSApi:
         xsrf_token = self.s.cookies.get("XSRF-TOKEN")
         if xsrf_token:
             self.s.headers["X-XSRF-TOKEN"] = xsrf_token
-        login = self.s.post(
-            "https://kos.cvut.cz/rest/login",
-            data={"username": username, "password": password},
+        self.s.headers["Authorization"] = password
+        login = self.s.get(
+            "https://kos.cvut.cz/rest/api/me",
         )
         self.login_data = login.json()
+        pprint(self.login_data)
         self.cached_courses = dict()
 
     def get_schedule_course(self, code: str, semester: str):
@@ -154,10 +156,12 @@ class KOSApi:
 
     @property
     def name(self):
-        return " ".join([
-            self.login_data["person"]["firstName"],
-            self.login_data["person"]["lastName"],
-        ])
+        return " ".join(
+            [
+                self.login_data["person"]["firstName"],
+                self.login_data["person"]["lastName"],
+            ]
+        )
 
 
 # Days in the week for ordering
@@ -224,7 +228,7 @@ def visualize_timetable(timetable):
         ax.text(
             start + (end - start) / 2,
             -y_position,
-            f"{event['name']} - {event["type"]}\n{event["teachers"]}\n{event['room']}",
+            f"{event['name']} - {event['type']}\n{event['teachers']}\n{event['room']}",
             ha="center",
             va="center",
             fontsize=8,
