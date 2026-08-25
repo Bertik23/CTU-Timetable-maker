@@ -174,3 +174,9 @@ poetry.toml
 pyrightconfig.json
 
 flask_session/
+
+poetry.lock
+
+*.sqlite
+
+uv.lock

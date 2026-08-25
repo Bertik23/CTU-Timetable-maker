@@ -6,58 +6,557 @@
 
 {% block body %}
     <!-- Main Container -->
-    <div class="container">
+    <div class="container my-4">
         <!-- Header Section -->
         <div class="text-center mb-4">
             <h1 class="display-4">Your Timetable</h1>
-            <p class="lead">Manage your courses below</p>
+            <p class="lead">Manage your courses and choose parallel classes below</p>
         </div>
 
         <!-- Remove Courses Section -->
-        <div class="mb-4">
-            <h3>Remove a Course</h3>
-            <div class="d-flex flex-wrap gap-2">
-                {% for course in courses %}
-                <a href="/timetable?courses={{ courses | reject('eq', course) | join(',') }}&semester={{ semester }}" class="btn btn-outline-danger btn-sm">
-                    {{ course }}
-                </a>
-                {% endfor %}
+        <div class="card mb-4 shadow-sm">
+            <div class="card-body">
+                <h4 class="card-title mb-3">Enrolled Courses</h4>
+                <div class="d-flex flex-wrap gap-2">
+                    {% for course in courses %}
+                    <a href="/timetable?courses={{ courses | reject('eq', course) | join(',') }}&semester={{ semester }}" 
+                       class="btn btn-outline-danger btn-sm" 
+                       title="Click to remove {{ course }}">
+                        <i class="bi bi-x-lg"></i> {{ course }} &times;
+                    </a>
+                    {% endfor %}
+                    {% if not courses %}
+                    <span class="text-muted">No courses selected. Use the selector below to add courses.</span>
+                    {% endif %}
+                </div>
             </div>
         </div>
 
         <!-- Add Courses Section -->
-        <div class="mb-4">
-            <h3>Add Courses</h3>
-            <p>Add courses, separated by commas:</p>
-            <div class="input-group">
-                <label for="add_courses" class="form-label">Add courses</label>
-                <!-- <input type="text" id="add_courses" class="form-control" data-role="tagsinput" placeholder="Start typing..." /> -->
-                <select id="add_courses" name="courses[]" class="form-select" multiple placeholder="Select a state..." autocomplete="on">
-                {% for course in user_data.get_available_courses(semester) %}
-                <option value="{{ course['code'] }}">{{ course["code"] }} - {{ course["nameCs"] }}</option>
-                {% endfor %}
-                </select>
-                <button class="btn btn-primary" onclick="location.href = '/timetable?semester={{ semester }}&courses={{ courses | join(',') }},'  + course_selector.getValue().join(',');">
-                    Load
-                </button>
+        <div class="card mb-4 shadow-sm">
+            <div class="card-body">
+                <h4 class="card-title mb-2">Add Courses</h4>
+                <p class="text-muted small mb-3">Select courses from the current semester to add to your timetable view:</p>
+                <div class="input-group">
+                    <select id="add_courses" name="courses[]" class="form-select" multiple placeholder="Search courses..." autocomplete="on">
+                    {% for course in user_data.get_available_courses(semester) %}
+                    <option value="{{ course['code'] }}">{{ course["code"] }} - {{ course["nameCs"] }}</option>
+                    {% endfor %}
+                    </select>
+                    <button class="btn btn-primary" onclick="loadSelectedCourses()">
+                        Load Courses
+                    </button>
+                </div>
             </div>
         </div>
 
+        {% if parallels_summary %}
+        <!-- Parallel Selection & Filter Section -->
+        <div class="parallel-panel shadow-sm">
+            <div class="d-flex justify-content-between align-items-center mb-3">
+                <h3 class="h4 mb-0">Course Parallels & Filter</h3>
+                <div class="btn-group btn-group-sm">
+                    <button class="btn btn-outline-success" onclick="showAllParallels()">Show All</button>
+                    <button class="btn btn-outline-danger" onclick="hideAllParallels()">Hide All</button>
+                    <button class="btn btn-outline-secondary" onclick="resetParallelFilters()">Reset</button>
+                </div>
+            </div>
+
+            <div id="parallelsContainer">
+                {% for course, types in parallels_summary.items() %}
+                <div class="parallel-course-card">
+                    <div class="parallel-course-header">
+                        <span>
+                            <strong class="fs-5">{{ course }}</strong>
+                        </span>
+                        <div class="btn-group btn-group-sm">
+                            <button class="btn btn-sm btn-outline-primary" onclick="showCourseParallels('{{ course }}')">Show {{ course }}</button>
+                            <button class="btn btn-sm btn-outline-secondary" onclick="hideCourseParallels('{{ course }}')">Hide {{ course }}</button>
+                        </div>
+                    </div>
+                    
+                    {% set type_labels = {'P': 'Lectures (Přednášky)', 'C': 'Seminars (Cvičení)', 'L': 'Labs (Laboratoře)'} %}
+                    {% set type_badges = {'P': 'bg-primary', 'C': 'bg-success', 'L': 'bg-danger'} %}
+                    {% for type_code, parallels in types.items() %}
+                    <div class="parallel-group">
+                        <div class="parallel-group-title">
+                            <span>
+                                <span class="badge {{ type_badges.get(type_code, 'bg-secondary') }} me-1">{{ type_code }}</span>
+                                {{ type_labels.get(type_code, type_code) }}
+                            </span>
+                            <div class="btn-group btn-group-sm">
+                                <button class="btn btn-xs btn-link text-decoration-none p-0 me-2" onclick="showTypeParallels('{{ course }}', '{{ type_code }}')">Show all {{ type_code }}</button>
+                                <button class="btn btn-xs btn-link text-decoration-none text-muted p-0" onclick="hideTypeParallels('{{ course }}', '{{ type_code }}')">Hide all {{ type_code }}</button>
+                            </div>
+                        </div>
+
+                        <div class="parallel-item-list">
+                            {% for pid, pinfo in parallels.items() %}
+                            <div class="parallel-item" id="parallel-item-{{ pid }}">
+                                <input type="checkbox" 
+                                       class="parallel-checkbox" 
+                                       id="cb-parallel-{{ pid }}" 
+                                       data-course="{{ course }}" 
+                                       data-type="{{ type_code }}" 
+                                       data-parallel-id="{{ pid }}" 
+                                       checked 
+                                       onchange="onParallelCheckboxChange('{{ pid }}', this.checked)">
+                                
+                                <label for="cb-parallel-{{ pid }}" class="mb-0 cursor-pointer user-select-none">
+                                    <strong>Parallel {{ pinfo.parallel_code }}</strong>
+                                    {% for slot in pinfo.slots %}
+                                    <span class="text-muted ms-1">
+                                        ({{ slot.day_name[:3] }} {{ slot.starttime }}-{{ slot.endtime }}{% if slot.room %} @ {{ slot.room }}{% endif %})
+                                    </span>
+                                    {% endfor %}
+                                    {% if pinfo.teachers %}
+                                    <small class="text-secondary d-block">{{ pinfo.teachers }}</small>
+                                    {% endif %}
+                                </label>
+
+                                 <button class="btn btn-outline-primary btn-only ms-auto" 
+                                         title="Show only this parallel for {{ type_labels.get(type_code, type_code) }}" 
+                                         onclick="onTableSelectOnly('{{ course }}', '{{ type_code }}', '{{ pid }}', '{{ pinfo.parallel_code }}')">
+                                     Only
+                                 </button>
+                            </div>
+                            {% endfor %}
+                        </div>
+                    </div>
+                    {% endfor %}
+                </div>
+                {% endfor %}
+            </div>
+        </div>
+        {% endif %}
+
         <!-- Timetable -->
-        <div class="timetable">
+        <div class="timetable mb-5">
             {{ timetable | safe }}
         </div>
     </div>
 {% endblock %}
+
 {% block foot %}
     <script src="https://cdn.jsdelivr.net/npm/tom-select@2.4.1/dist/js/tom-select.complete.min.js"></script>
     <script>
-let course_selector = new TomSelect("#add_courses", {plugins: ['remove_button']})
-document.addEventListener('click', function(e) {
-    if (e.target.classList.contains('ctm-event')) {
-        e.target.remove();
-    }
-});
+        const STORAGE_KEY = 'ctu_hidden_parallels_{{ semester }}_{{ courses | join("_") }}';
+        let course_selector = new TomSelect("#add_courses", {plugins: ['remove_button']});
+
+        function loadSelectedCourses() {
+            const newCourses = course_selector.getValue();
+            const existingCourses = "{{ courses | join(',') }}".split(',').filter(Boolean);
+            const combined = Array.from(new Set([...existingCourses, ...newCourses]));
+            location.href = '/timetable?semester={{ semester }}&courses=' + combined.join(',');
+        }
+
+        function getHiddenParallelsFromStorage() {
+            try {
+                const stored = localStorage.getItem(STORAGE_KEY);
+                return stored ? JSON.parse(stored) : [];
+            } catch (e) {
+                return [];
+            }
+        }
+
+        function saveHiddenParallelsToStorage(hiddenIds) {
+            try {
+                localStorage.setItem(STORAGE_KEY, JSON.stringify(hiddenIds));
+            } catch (e) {}
+        }
+
+        function updateStoredHiddenParallels() {
+            const hiddenIds = [];
+            document.querySelectorAll('.parallel-checkbox').forEach(cb => {
+                if (!cb.checked) {
+                    hiddenIds.push(cb.getAttribute('data-parallel-id'));
+                }
+            });
+            saveHiddenParallelsToStorage(hiddenIds);
+        }
+
+        function toggleParallel(pid, isVisible, updateCheckbox = false) {
+            if (updateCheckbox) {
+                const cb = document.getElementById('cb-parallel-' + pid);
+                if (cb) cb.checked = isVisible;
+            }
+
+            const item = document.getElementById('parallel-item-' + pid);
+            if (item) {
+                item.classList.toggle('disabled', !isVisible);
+            }
+
+            const events = document.querySelectorAll('.ctm-event[data-parallel-id="' + pid + '"]');
+            events.forEach(el => {
+                if (isVisible) {
+                    el.classList.remove('ctm-hidden');
+                } else {
+                    el.classList.add('ctm-hidden');
+                }
+            });
+
+            recalculateTimetableLayout();
+        }
+
+        function onParallelCheckboxChange(pid, isChecked) {
+            toggleParallel(pid, isChecked, false);
+            updateStoredHiddenParallels();
+        }
+
+        function showAllParallels() {
+            document.querySelectorAll('.parallel-checkbox').forEach(cb => {
+                cb.checked = true;
+                toggleParallel(cb.getAttribute('data-parallel-id'), true, false);
+            });
+            updateStoredHiddenParallels();
+        }
+
+        function hideAllParallels() {
+            document.querySelectorAll('.parallel-checkbox').forEach(cb => {
+                cb.checked = false;
+                toggleParallel(cb.getAttribute('data-parallel-id'), false, false);
+            });
+            updateStoredHiddenParallels();
+        }
+
+        function resetParallelFilters() {
+            showAllParallels();
+            try { localStorage.removeItem(STORAGE_KEY); } catch (e) {}
+        }
+
+        function showCourseParallels(course) {
+            document.querySelectorAll('.parallel-checkbox[data-course="' + course + '"]').forEach(cb => {
+                cb.checked = true;
+                toggleParallel(cb.getAttribute('data-parallel-id'), true, false);
+            });
+            updateStoredHiddenParallels();
+        }
+
+        function hideCourseParallels(course) {
+            document.querySelectorAll('.parallel-checkbox[data-course="' + course + '"]').forEach(cb => {
+                cb.checked = false;
+                toggleParallel(cb.getAttribute('data-parallel-id'), false, false);
+            });
+            updateStoredHiddenParallels();
+        }
+
+        function showTypeParallels(course, typeCode) {
+            const selector = '.parallel-checkbox[data-course="' + course + '"][data-type="' + typeCode + '"]';
+            document.querySelectorAll(selector).forEach(cb => {
+                cb.checked = true;
+                toggleParallel(cb.getAttribute('data-parallel-id'), true, false);
+            });
+            updateStoredHiddenParallels();
+        }
+
+        function hideTypeParallels(course, typeCode) {
+            const selector = '.parallel-checkbox[data-course="' + course + '"][data-type="' + typeCode + '"]';
+            document.querySelectorAll(selector).forEach(cb => {
+                cb.checked = false;
+                toggleParallel(cb.getAttribute('data-parallel-id'), false, false);
+            });
+            updateStoredHiddenParallels();
+        }
+
+        function restoreHiddenState(previousHidden, course, typeCode) {
+            document.querySelectorAll('.parallel-checkbox[data-course="' + course + '"][data-type="' + typeCode + '"]').forEach(cb => {
+                const cbPid = cb.getAttribute('data-parallel-id');
+                const wasVisible = !previousHidden.includes(cbPid);
+                cb.checked = wasVisible;
+                toggleParallel(cbPid, wasVisible, false);
+            });
+            updateStoredHiddenParallels();
+        }
+
+        function selectOnlyParallel(course, typeCode, targetPid) {
+            targetPid = String(targetPid).trim();
+            course = String(course).trim();
+            typeCode = String(typeCode).trim();
+
+            const pidsForType = new Set();
+            
+            document.querySelectorAll('.parallel-checkbox').forEach(cb => {
+                if (cb.getAttribute('data-course') === course && cb.getAttribute('data-type') === typeCode) {
+                    const pid = String(cb.getAttribute('data-parallel-id')).trim();
+                    if (pid) pidsForType.add(pid);
+                }
+            });
+
+            document.querySelectorAll('.ctm-event').forEach(el => {
+                if (el.getAttribute('data-course') === course && el.getAttribute('data-type') === typeCode) {
+                    const pid = String(el.getAttribute('data-parallel-id')).trim();
+                    if (pid) pidsForType.add(pid);
+                }
+            });
+
+            let isTargetOnlyVisible = true;
+            pidsForType.forEach(pid => {
+                const cb = document.getElementById('cb-parallel-' + pid);
+                let isVisible = false;
+                if (cb) {
+                    isVisible = cb.checked;
+                } else {
+                    const ev = document.querySelector(`.ctm-event[data-parallel-id="${pid}"]`);
+                    isVisible = ev && !ev.classList.contains('ctm-hidden');
+                }
+
+                if (pid === targetPid && !isVisible) {
+                    isTargetOnlyVisible = false;
+                }
+                if (pid !== targetPid && isVisible) {
+                    isTargetOnlyVisible = false;
+                }
+            });
+
+            if (isTargetOnlyVisible) {
+                // TOGGLE OFF: Unhide ALL parallels of this type
+                pidsForType.forEach(pid => {
+                    toggleParallel(pid, true, true);
+                });
+                updateStoredHiddenParallels();
+                return 'unselectAll';
+            } else {
+                // TOGGLE ON: Keep ONLY targetPid visible
+                pidsForType.forEach(pid => {
+                    const shouldBeVisible = (pid === targetPid);
+                    toggleParallel(pid, shouldBeVisible, true);
+                });
+                updateStoredHiddenParallels();
+                return 'selectOnly';
+            }
+        }
+
+        function recalculateTimetableLayout() {
+            const rows = document.querySelectorAll('.ctm-row');
+            rows.forEach(row => {
+                let maxHeight = 0;
+                const children = row.children;
+                for (let i = 0; i < children.length; i++) {
+                    const child = children[i];
+                    if (child.classList.contains('ctm-hidden')) continue;
+                    maxHeight = Math.max(maxHeight, child.offsetHeight || 32);
+                }
+                row.style.height = maxHeight > 0 ? maxHeight + 'px' : '0px';
+            });
+
+            const days = document.querySelectorAll('.ctm-day');
+            days.forEach(day => {
+                let totalHeight = 0;
+                const rows = day.querySelectorAll('.ctm-row');
+                rows.forEach(r => {
+                    totalHeight += r.offsetHeight;
+                });
+                day.style.height = Math.max(64, totalHeight + 30) + 'px';
+            });
+        }
+
+        function showToast(message, undoCallback = null) {
+            let container = document.getElementById('ctm-toast-container');
+            if (!container) {
+                container = document.createElement('div');
+                container.id = 'ctm-toast-container';
+                document.body.appendChild(container);
+            }
+
+            const toast = document.createElement('div');
+            toast.className = 'ctm-toast';
+            
+            let html = `<span>${message}</span>`;
+            if (undoCallback) {
+                html += `<button class="btn btn-sm btn-outline-light py-0 px-2 text-white border-white ms-auto" style="font-size: 0.75rem;">Undo</button>`;
+            }
+            toast.innerHTML = html;
+
+            if (undoCallback) {
+                const btn = toast.querySelector('button');
+                btn.addEventListener('click', function() {
+                    undoCallback();
+                    toast.remove();
+                });
+            }
+
+            container.appendChild(toast);
+            setTimeout(() => {
+                if (toast.parentNode) {
+                    toast.style.opacity = '0';
+                    toast.style.transform = 'translateY(10px)';
+                    toast.style.transition = 'all 0.25s ease';
+                    setTimeout(() => toast.remove(), 250);
+                }
+            }, 4000);
+        }
+
+        function onTableRemoveParallel(pid, course, pcode) {
+            toggleParallel(pid, false, true);
+            updateStoredHiddenParallels();
+            showToast(`Removed Parallel ${pcode || ''} (${course || ''}) from table`, function() {
+                toggleParallel(pid, true, true);
+                updateStoredHiddenParallels();
+            });
+        }
+
+        function onTableSelectOnly(course, typeCode, pid, pcode) {
+            const previousHidden = getHiddenParallelsFromStorage();
+
+            const action = selectOnlyParallel(course, typeCode, pid);
+            
+            if (action === 'unselectAll') {
+                showToast(`Unhid all parallels for ${course}`, function() {
+                    restoreHiddenState(previousHidden, course, typeCode);
+                });
+            } else {
+                showToast(`Selected Parallel ${pcode || ''} for ${course}`, function() {
+                    restoreHiddenState(previousHidden, course, typeCode);
+                });
+            }
+        }
+
+        let activePopover = null;
+
+        function closeActivePopover() {
+            if (activePopover) {
+                activePopover.remove();
+                activePopover = null;
+            }
+        }
+
+        // Click handler on timetable grid events & buttons
+        document.addEventListener('click', function(e) {
+            const selectBtn = e.target.closest('[data-action="select-only"]');
+            if (selectBtn) {
+                e.stopPropagation();
+                e.preventDefault();
+                const eventCard = selectBtn.closest('.ctm-event');
+                if (eventCard) {
+                    const pid = eventCard.getAttribute('data-parallel-id');
+                    const course = eventCard.getAttribute('data-course');
+                    const pcode = eventCard.getAttribute('data-parallel-code');
+                    const ptype = eventCard.getAttribute('data-type');
+                    onTableSelectOnly(course, ptype, pid, pcode);
+                    closeActivePopover();
+                }
+                return;
+            }
+
+            const removeBtn = e.target.closest('[data-action="remove"]');
+            if (removeBtn) {
+                e.stopPropagation();
+                e.preventDefault();
+                const eventCard = removeBtn.closest('.ctm-event');
+                if (eventCard) {
+                    const pid = eventCard.getAttribute('data-parallel-id');
+                    const course = eventCard.getAttribute('data-course');
+                    const pcode = eventCard.getAttribute('data-parallel-code');
+                    onTableRemoveParallel(pid, course, pcode);
+                    closeActivePopover();
+                }
+                return;
+            }
+
+            const popoverSelect = e.target.closest('[data-action="popover-select-only"]');
+            if (popoverSelect) {
+                e.stopPropagation();
+                e.preventDefault();
+                const eventCard = popoverSelect.closest('.ctm-event');
+                if (eventCard) {
+                    const pid = eventCard.getAttribute('data-parallel-id');
+                    const course = eventCard.getAttribute('data-course');
+                    const pcode = eventCard.getAttribute('data-parallel-code');
+                    const ptype = eventCard.getAttribute('data-type');
+                    onTableSelectOnly(course, ptype, pid, pcode);
+                    closeActivePopover();
+                }
+                return;
+            }
+
+            const popoverRemove = e.target.closest('[data-action="popover-remove"]');
+            if (popoverRemove) {
+                e.stopPropagation();
+                e.preventDefault();
+                const eventCard = popoverRemove.closest('.ctm-event');
+                if (eventCard) {
+                    const pid = eventCard.getAttribute('data-parallel-id');
+                    const course = eventCard.getAttribute('data-course');
+                    const pcode = eventCard.getAttribute('data-parallel-code');
+                    onTableRemoveParallel(pid, course, pcode);
+                    closeActivePopover();
+                }
+                return;
+            }
+
+            const eventCard = e.target.closest('.ctm-event');
+
+            if (!eventCard && !e.target.closest('.ctm-popover-toolbar')) {
+                closeActivePopover();
+            }
+
+            if (eventCard) {
+                const pid = eventCard.getAttribute('data-parallel-id');
+                const course = eventCard.getAttribute('data-course');
+                const pcode = eventCard.getAttribute('data-parallel-code');
+                const ptype = eventCard.getAttribute('data-type');
+
+                const relatedEvents = document.querySelectorAll('.ctm-event[data-parallel-id="' + pid + '"]');
+                const isHighlighted = eventCard.classList.contains('highlighted');
+
+                document.querySelectorAll('.ctm-event.highlighted').forEach(el => el.classList.remove('highlighted'));
+
+                if (!isHighlighted) {
+                    relatedEvents.forEach(el => el.classList.add('highlighted'));
+                }
+
+                closeActivePopover();
+
+                // Check if this parallel is currently the ONLY visible one for its type
+                const hiddenEvents = document.querySelectorAll(`.ctm-event[data-course="${course}"][data-type="${ptype}"].ctm-hidden`);
+                const allTypeEvents = document.querySelectorAll(`.ctm-event[data-course="${course}"][data-type="${ptype}"]`);
+                const isOnly = hiddenEvents.length > 0 && Array.from(allTypeEvents).every(el => {
+                    const elPid = el.getAttribute('data-parallel-id');
+                    return elPid === pid ? !el.classList.contains('ctm-hidden') : el.classList.contains('ctm-hidden');
+                });
+
+                const btnLabel = isOnly ? `✓ Unhide All (${pcode})` : `✓ Keep Only ${pcode}`;
+
+                const toolbar = document.createElement('div');
+                toolbar.className = 'ctm-popover-toolbar';
+                toolbar.innerHTML = `
+                    <button type="button" class="btn btn-sm ${isOnly ? 'btn-warning' : 'btn-success'} py-0 px-2" style="font-size:0.75rem;" data-action="popover-select-only">
+                        ${btnLabel}
+                    </button>
+                    <button type="button" class="btn btn-sm btn-danger py-0 px-2" style="font-size:0.75rem;" data-action="popover-remove">
+                        × Remove
+                    </button>
+                `;
+                eventCard.appendChild(toolbar);
+                activePopover = toolbar;
+
+                const item = document.getElementById('parallel-item-' + pid);
+                if (item) {
+                    item.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+                    item.style.borderColor = '#ffc107';
+                    setTimeout(() => { item.style.borderColor = ''; }, 2000);
+                }
+            }
+        });
+
+        // Restore hidden state on initial load
+        document.addEventListener('DOMContentLoaded', function() {
+            const hiddenIds = getHiddenParallelsFromStorage();
+            const allCheckboxes = document.querySelectorAll('.parallel-checkbox');
+            const totalCount = allCheckboxes.length;
+
+            if (hiddenIds && hiddenIds.length > 0 && totalCount > 0 && hiddenIds.length >= totalCount) {
+                try { localStorage.removeItem(STORAGE_KEY); } catch (e) {}
+            } else if (hiddenIds && hiddenIds.length > 0) {
+                hiddenIds.forEach(pid => {
+                    const cb = document.getElementById('cb-parallel-' + pid);
+                    if (cb) {
+                        cb.checked = false;
+                        toggleParallel(pid, false, false);
+                    }
+                });
+            }
+            recalculateTimetableLayout();
+        });
     </script>
 {% endblock %}
-

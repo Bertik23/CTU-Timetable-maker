@@ -8,14 +8,11 @@
                 <div class="card-header text-center bg-primary text-white">
                     <h3>Login</h3>
                 </div>
+                <p class="text-center mt-3">Please enter your auth token to access the application. You can get the token by logging into KOS, opening dev view, Network tab, loading a page and getting the <emph>Authentication</emph> header value.</p>
                 <div class="card-body">
                     <form method="POST" action="/login">
                         <div class="mb-3">
-                            <label for="username" class="form-label">Username</label>
-                            <input type="text" id="username" name="username" class="form-control" placeholder="Enter your username" required>
-                        </div>
-                        <div class="mb-3">
-                            <label for="password" class="form-label">Password</label>
+                            <label for="password" class="form-label">Auth token</label>
                             <input type="password" id="password" name="password" class="form-control" placeholder="Enter your password" required>
                         </div>
                         <div class="d-grid">

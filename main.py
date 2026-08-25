@@ -12,7 +12,7 @@ from flask_session import Session
 import pprint
 
 
-from kos_api import KOSApi, visualize_timetable_html
+from kos_api import KOSApi, visualize_timetable_html, get_parallels_summary
 
 app = Flask(__name__)
 
@@ -33,7 +33,7 @@ def home():
     sem_courses = kos.get_courses()
     course_codes = dict()
     for sem, courses in sem_courses.items():
-        course_codes[sem] = map(lambda course: course["code"], courses)
+        course_codes[sem] = [c["code"] for c in courses if "code" in c]
     return render_template(
         "home.html",
         user_data=session.get("kos"),
@@ -46,10 +46,9 @@ def home():
 @app.route("/login", methods=["GET", "POST"])
 def login():
     if request.method == "POST":
-        username = request.form["username"]
         password = request.form["password"]
 
-        kos = KOSApi(username, password)
+        kos = KOSApi(password)
 
         session["kos"] = kos
         return redirect("/")
@@ -62,14 +61,37 @@ def timetable():
     kos = session.get("kos")
     if kos is None:
         return redirect("/login")
-    courses = request.args.get("courses").split(",")
-    semester = request.args.get("semester")
 
-    print(courses)
+    courses_raw = request.args.get("courses") or ""
+    courses = [c.strip() for c in courses_raw.split(",") if c.strip()]
+    semester = request.args.get("semester") or ""
+
+    if not semester:
+        try:
+            semesters = kos.get_semesters()
+            if semesters:
+                semester = semesters[0].get("id", "")
+        except Exception:
+            semester = ""
+
+    if not courses and semester:
+        try:
+            sem_courses = kos.get_courses()
+            registered = sem_courses.get(semester, [])
+            courses = [c["code"] for c in registered if "code" in c]
+        except Exception:
+            courses = []
+
+    timetable_data = (
+        kos.get_schedule_courses(courses, semester) if courses and semester else []
+    )
+    parallels_summary = get_parallels_summary(timetable_data)
+    timetable_html = visualize_timetable_html(timetable_data)
 
     return render_template(
         "timetable.html",
-        timetable=visualize_timetable_html(kos.get_schedule_courses(courses, semester)),
+        timetable=timetable_html,
+        parallels_summary=parallels_summary,
         courses=courses,
         semester=semester,
         user_data=kos,
@@ -82,4 +104,5 @@ def logout():
     return redirect("/")
 
 
-app.run(debug=True)
+if __name__ == "__main__":
+    app.run(debug=True)

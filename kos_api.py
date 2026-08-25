@@ -54,7 +54,7 @@ base = "https://kos.cvut.cz/rest/api/"
 
 
 class KOSApi:
-    def __init__(self, username, password):
+    def __init__(self, password):
         self.s = requests.Session()
         self.s.get("https://kos.cvut.cz/rest/login")
         xsrf_token = self.s.cookies.get("XSRF-TOKEN")
@@ -70,48 +70,94 @@ class KOSApi:
 
     def get_schedule_course(self, code: str, semester: str):
         try:
-            sid = self.s.get(
+            res = self.s.get(
                 base + "course-semesters",
                 params={
                     "expanded": "semester",
                     "query": f"semesterId=={semester};code=={code}",
                     "size": 1,
                 },
-            ).json()["elements"][0]["courseId"]
-        except IndexError:
+            ).json()
+            elements = res.get("elements", [])
+            if not elements:
+                return []
+            sid = elements[0].get("courseId")
+            if not sid:
+                return []
+        except Exception:
             return []
-        except KeyError:
+
+        try:
+            res_tt = self.s.get(
+                base + "timetables/timetable-tickets",
+                params={
+                    "expanded": "parallelClass.teachers,parallelClass.parallelType,room",
+                    "query": f"courseId=={sid};semesterId=={semester}",
+                    "size": 0,
+                },
+            ).json()
+            timetable = res_tt.get("elements", [])
+        except Exception:
             return []
 
-        timetable = self.s.get(
-            base + "timetables/timetable-tickets",
-            params={
-                "expanded": "parallelClass.teachers,parallelClass.parallelType,room",
-                "query": f"courseId=={sid};semesterId=={semester}",
-                "size": 0,
-            },
-        ).json()["elements"]
+        out = []
+        for ticket in timetable:
+            try:
+                p_class = ticket.get("parallelClass") or {}
 
-        # pprint(timetable)
+                p_id_raw = p_class.get("id")
+                p_code_raw = p_class.get("code") or p_class.get("number")
 
-        return [
-            {
-                "name": code,
-                "type": ticket["parallelClass"]["parallelType"]["code"],
-                "day": int(ticket["dayNumber"]) - 1,
-                "starttime": ticket["ticketStart"],
-                "endtime": ticket["ticketEnd"],
-                "room": ticket.get("room", {}).get("roomNumber", ""),
-                "teachers": ", ".join(
-                    map(
-                        lambda x: " ".join([x["firstName"], x["lastName"]]),
-                        ticket["parallelClass"]["teachers"],
-                    )
-                ),
-                "weeks": ticket.get("evenOddWeek"),
-            }
-            for ticket in timetable
-        ]
+                p_type_obj = p_class.get("parallelType") or {}
+                p_type = p_type_obj.get("code") or "P"
+
+                p_id = (
+                    str(p_id_raw)
+                    if (p_id_raw is not None and p_id_raw != "")
+                    else (str(p_code_raw) if p_code_raw else f"{code}_{p_type}")
+                )
+                p_code = str(p_code_raw) if p_code_raw else p_id
+
+                teachers_list = p_class.get("teachers") or []
+                teacher_names = []
+                for t in teachers_list:
+                    if isinstance(t, dict):
+                        fname = t.get("firstName") or ""
+                        lname = t.get("lastName") or ""
+                        name_str = f"{fname} {lname}".strip()
+                        if name_str:
+                            teacher_names.append(name_str)
+                teachers_str = ", ".join(teacher_names)
+
+                room_obj = ticket.get("room") or {}
+                room_str = room_obj.get("roomNumber") or ""
+
+                day_num = ticket.get("dayNumber")
+                if day_num is None:
+                    continue
+                day_idx = int(day_num) - 1
+
+                starttime = ticket.get("ticketStart") or "00:00"
+                endtime = ticket.get("ticketEnd") or "00:00"
+
+                out.append(
+                    {
+                        "id": ticket.get("id"),
+                        "parallel_id": p_id,
+                        "parallel_code": p_code,
+                        "name": code,
+                        "type": p_type,
+                        "day": day_idx,
+                        "starttime": starttime,
+                        "endtime": endtime,
+                        "room": room_str,
+                        "teachers": teachers_str,
+                        "weeks": ticket.get("evenOddWeek"),
+                    }
+                )
+            except Exception:
+                continue
+        return out
 
     def get_schedule_courses(self, codes: list[str], semester: str):
         out = []
@@ -123,6 +169,8 @@ class KOSApi:
         return self.login_data["studies"][0]["semesters"]
 
     def get_available_courses(self, semester):
+        if not semester:
+            return []
         if semester in self.cached_courses:
             return self.cached_courses[semester]
         self.cached_courses[semester] = self.s.get(
@@ -260,6 +308,58 @@ def visualize_timetable(timetable):
     return fig
 
 
+def get_parallels_summary(timetable):
+    """
+    Groups timetable tickets by course name -> parallel type (P, C, L, etc.) -> parallel_id.
+    Returns a dictionary structure suitable for rendering the Parallel Selection Control Panel.
+    """
+    summary = {}
+    for event in timetable:
+        try:
+            course = event.get("name") or "Unknown"
+            ptype = event.get("type") or "P"
+            pid = str(event.get("parallel_id") or "")
+            pcode = str(event.get("parallel_code") or pid)
+
+            if course not in summary:
+                summary[course] = {}
+            if ptype not in summary[course]:
+                summary[course][ptype] = {}
+
+            if pid not in summary[course][ptype]:
+                summary[course][ptype][pid] = {
+                    "parallel_id": pid,
+                    "parallel_code": pcode,
+                    "type": ptype,
+                    "course": course,
+                    "teachers": event.get("teachers") or "",
+                    "room": event.get("room") or "",
+                    "slots": [],
+                }
+
+            day_idx = event.get("day", 0)
+            day_name = (
+                days_names[day_idx]
+                if (isinstance(day_idx, int) and 0 <= day_idx < len(days_names))
+                else f"Day {day_idx}"
+            )
+
+            summary[course][ptype][pid]["slots"].append(
+                {
+                    "day": day_idx,
+                    "day_name": day_name,
+                    "starttime": event.get("starttime") or "",
+                    "endtime": event.get("endtime") or "",
+                    "room": event.get("room") or "",
+                    "teachers": event.get("teachers") or "",
+                }
+            )
+        except Exception:
+            continue
+
+    return summary
+
+
 def visualize_timetable_html(timetable):
     grouped_events = {day: [] for day in days_order}
     for event in timetable:
@@ -267,8 +367,6 @@ def visualize_timetable_html(timetable):
 
     for day in grouped_events:
         grouped_events[day].sort(key=lambda e: e["starttime"])
-
-    # pprint(grouped_events)
 
     # Compute rows for overlapping events
     plotted_events = []
@@ -302,15 +400,19 @@ def visualize_timetable_html(timetable):
                 plotted_events[-1].append([])
             plotted_events[-1][row].append((start, end, event))
 
+    if min_time >= max_time:
+        min_time = 7.5
+        max_time = 19.5
+
     type_to_class = {
         "P": "ctm-event-lecture",
         "C": "ctm-event-seminar",
         "L": "ctm-event-lab",
     }
 
-    courses = list(map(lambda x: x["name"], timetable))
-    colorpalet = generate_colormap_colors(len(courses))
-    course_colors = {course: colorpalet[i] for i, course in enumerate(courses)}
+    unique_courses = list(dict.fromkeys(x["name"] for x in timetable))
+    colorpalet = generate_colormap_colors(max(1, len(unique_courses)))
+    course_colors = {course: colorpalet[i] for i, course in enumerate(unique_courses)}
 
     out = '<div class="ctm-table">'
     lenght = max_time - min_time
@@ -331,22 +433,30 @@ def visualize_timetable_html(timetable):
         for j, row in enumerate(day):
             out += f'<div class="ctm-row" id="row-{i}-{j}">'
             for event in row:
-                out += f'<div class="ctm-event {type_to_class[event[2]["type"]]}" '
+                ev_data = event[2]
+                ev_type = ev_data["type"]
+                type_cls = type_to_class.get(ev_type, "ctm-event-other")
+                p_id = str(ev_data.get("parallel_id", ""))
+                p_code = str(ev_data.get("parallel_code", ""))
+                c_name = ev_data["name"]
+
+                out += f'<div class="ctm-event {type_cls}" '
+                out += f'data-course="{c_name}" '
+                out += f'data-parallel-id="{p_id}" '
+                out += f'data-parallel-code="{p_code}" '
+                out += f'data-type="{ev_type}" '
                 out += f'style="width:{(event[1] - event[0]) * 100 / lenght}%;left:{(event[0] - min_time) * 100 / lenght}%;'
-                out += f'background-color: {course_colors[event[2]["name"]][0]}; color: {course_colors[event[2]["name"]][1]}">'
-                out += (
-                    event[2]["type"]
-                    + " - "
-                    + event[2]["name"]
-                    + "<br>"
-                    + event[2]["teachers"]
-                    + "<br>"
-                    + event[2]["room"]
-                    + "<br>"
-                    + event[2]["starttime"]
-                    + " - "
-                    + event[2]["endtime"]
-                )
+                out += f'background-color: {course_colors[c_name][0]}; color: {course_colors[c_name][1]}">'
+                out += f'<div class="ctm-event-actions">'
+                out += f'<button type="button" class="ctm-act-btn ctm-act-select" title="Keep ONLY this parallel in table" data-action="select-only">&#10003;</button>'
+                out += f'<button type="button" class="ctm-act-btn ctm-act-remove" title="Remove/Hide this parallel from table" data-action="remove">&#215;</button>'
+                out += f"</div>"
+                out += f'<span class="ctm-event-header"><strong>{c_name}</strong> [{ev_type}{p_code}]</span><br>'
+                if ev_data["teachers"]:
+                    out += f'<span class="ctm-event-teacher">{ev_data["teachers"]}</span><br>'
+                if ev_data["room"]:
+                    out += f'<span class="ctm-event-room">{ev_data["room"]}</span><br>'
+                out += f'<span class="ctm-event-time">{ev_data["starttime"]} - {ev_data["endtime"]}</span>'
                 out += "</div>"
             out += "</div>"
             out += "<script>"
@@ -354,6 +464,7 @@ def visualize_timetable_html(timetable):
             out += "var children = document.getElementById(row_id).children;"
             out += """for (var i = 0; i < children.length; i++) {
                   var tableChild = children[i];
+                  if (tableChild.classList.contains('ctm-hidden')) continue;
                   max_height = tableChild.offsetHeight < max_height ? max_height : tableChild.offsetHeight;
                 }
                 """
