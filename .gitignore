@@ -179,4 +179,4 @@ poetry.lock
 
 *.sqlite
 
-uv.lock
+# uv.lock is committed for reproducible builds with uv
